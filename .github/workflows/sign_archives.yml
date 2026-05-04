@@ -5,7 +5,6 @@ on:
     paths:
       - 'uploads/**'
       - '**/*.apk'
-      - '**/*.xapk'
   workflow_dispatch:
 
 jobs:
@@ -26,26 +25,24 @@ jobs:
         env:
           K_FILE: ${{ secrets.KEYSTORE_FILE }}
         run: |
-          # 1. ניקוי יסודי של רווחים ופענוח עם התעלמות מתווים לא חוקיים (Garbage)
-          echo "$K_FILE" | tr -d '[:space:]' | base64 --decode --ignore-garbage > release.jks
+          # ניקוי אגרסיבי של רווחים, ירידות שורה ותווים מיוחדים
+          # ואז פענוח ישירות לקובץ
+          echo "$K_FILE" | tr -d '\n\r ' | base64 --decode > release.jks
           
-          # 2. בדיקת תקינות הקובץ
-          if [ ! -s release.jks ]; then
-            echo "Error: Resulting keystore file is empty!"
+          # בדיקה ויזואלית ללוג - אם נראה "ASCII text", הפענוח נכשל
+          file release.jks
+          
+          # וידוא שהקובץ אינו טקסטואלי (Keystore חייב להיות Data)
+          if file release.jks | grep -q "text"; then
+            echo "ERROR: Keystore is still in text format! Decoding failed."
             exit 1
           fi
-          
-          # 3. הדפסת מידע ללוג (עוזר לאתר אם הקובץ הוא באמת Keystore)
-          echo "File info:"
-          file release.jks
-          echo "File size: $(stat -c%s release.jks) bytes"
 
       - name: Process and Sign Files
         run: |
           mkdir -p signed_packages
           
-          # חיפוש קבצים (נמנע מתיקיית הפלט)
-          find . -type f \( -name "*.apk" -o -name "*.xapk" \) | while read file; do
+          find . -type f -name "*.apk" | while read file; do
             if [[ "$file" == *"signed_packages"* ]]; then continue; fi
             
             filename=$(basename "$file")
@@ -54,11 +51,9 @@ jobs:
             echo "------------------------------------------"
             echo "Packing and Signing: $filename"
             
-            # אריזה ל-ZIP
             zip -j "signed_packages/$zip_name" "$file"
             
-            # חתימה - הסרנו את ה-storetype כדי לאפשר זיהוי אוטומטי
-            # הוספנו גרשיים סביב הסיסמאות למקרה שיש בהן תווים מיוחדים
+            # ניסיון חתימה
             jarsigner -keystore release.jks \
               -storepass "${{ secrets.KEYSTORE_PASSWORD }}" \
               -keypass "${{ secrets.KEY_PASSWORD }}" \
@@ -67,7 +62,7 @@ jobs:
               "signed_packages/$zip_name" \
               "${{ secrets.KEY_ALIAS }}"
               
-            echo "Successfully created: $zip_name"
+            echo "Success!"
           done
 
       - name: Upload Signed Artifacts
@@ -75,4 +70,3 @@ jobs:
         with:
           name: signed-apps-collection
           path: signed_packages/
-          retention-days: 5
