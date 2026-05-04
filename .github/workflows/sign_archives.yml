@@ -1,0 +1,58 @@
+name: Sign App Archives
+
+on:
+  push:
+    paths:
+      - 'uploads/**' # ה-Workflow ירוץ כשמעלים קבצים לתיקיית uploads
+  workflow_dispatch: # מאפשר להריץ ידנית
+
+jobs:
+  sign_and_package:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > release.jks
+
+      - name: Process and Sign Files
+        run: |
+          # יצירת תיקיית פלט
+          mkdir -p signed_packages
+          
+          # לולאה שעוברת על כל קבצי האפליקציות בתיקיית uploads
+          # תומך ב-apk, xapk, apks
+          find uploads/ -type f \( -name "*.apk" -o -name "*.xapk" -o -name "*.apks" \) | while read file; do
+            filename=$(basename "$file")
+            zip_name="${filename%.*}.zip"
+            
+            echo "Processing $filename..."
+            
+            # 1. אריזה ל-ZIP (ה-APK נכנס פנימה ללא שינוי)
+            zip -j "signed_packages/$zip_name" "$file"
+            
+            # 2. חתימה על ה-ZIP באמצעות jarsigner
+            jarsigner -keystore release.jks \
+              -storepass "${{ secrets.KEYSTORE_PASSWORD }}" \
+              -keypass "${{ secrets.KEY_PASSWORD }}" \
+              "signed_packages/$zip_name" \
+              "${{ secrets.KEY_ALIAS }}"
+              
+            echo "Successfully signed $zip_name"
+          done
+
+      - name: Upload Signed Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-apps-collection
+          path: signed_packages/
+          
