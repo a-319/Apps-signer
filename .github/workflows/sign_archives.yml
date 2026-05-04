@@ -25,16 +25,15 @@ jobs:
         env:
           K_FILE: ${{ secrets.KEYSTORE_FILE }}
         run: |
-          # ניקוי אגרסיבי של רווחים, ירידות שורה ותווים מיוחדים
-          # ואז פענוח ישירות לקובץ
-          echo "$K_FILE" | tr -d '\n\r ' | base64 --decode > release.jks
+          # שימוש בפייתון כדי להבטיח פענוח בינארי תקין ללא תלות ב-Shell
+          python3 -c "import base64, os; data = os.environ['K_FILE'].strip(); open('release.jks', 'wb').write(base64.b64decode(data))"
           
-          # בדיקה ויזואלית ללוג - אם נראה "ASCII text", הפענוח נכשל
+          # בדיקה שהקובץ פוענח כראוי (אמור להציג 'Data' או 'Java KeyStore' ולא 'ASCII')
+          echo "File type detection:"
           file release.jks
           
-          # וידוא שהקובץ אינו טקסטואלי (Keystore חייב להיות Data)
           if file release.jks | grep -q "text"; then
-            echo "ERROR: Keystore is still in text format! Decoding failed."
+            echo "ERROR: Decoding failed - File is still text. Check if your Secret is valid Base64."
             exit 1
           fi
 
@@ -42,6 +41,7 @@ jobs:
         run: |
           mkdir -p signed_packages
           
+          # חיפוש קבצי APK
           find . -type f -name "*.apk" | while read file; do
             if [[ "$file" == *"signed_packages"* ]]; then continue; fi
             
@@ -51,9 +51,10 @@ jobs:
             echo "------------------------------------------"
             echo "Packing and Signing: $filename"
             
+            # אריזה ל-ZIP
             zip -j "signed_packages/$zip_name" "$file"
             
-            # ניסיון חתימה
+            # חתימה עם jarsigner
             jarsigner -keystore release.jks \
               -storepass "${{ secrets.KEYSTORE_PASSWORD }}" \
               -keypass "${{ secrets.KEY_PASSWORD }}" \
@@ -62,7 +63,7 @@ jobs:
               "signed_packages/$zip_name" \
               "${{ secrets.KEY_ALIAS }}"
               
-            echo "Success!"
+            echo "Success: $zip_name created and signed."
           done
 
       - name: Upload Signed Artifacts
