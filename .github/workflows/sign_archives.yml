@@ -3,9 +3,10 @@ name: Sign App Archives
 on:
   push:
     paths:
-      - 'uploads/**' # ירוץ כשמעלים קבצים לתיקיית uploads
-      - '**/*.apk'   # ירוץ כשמעלים APK לכל מקום אחר
-  workflow_dispatch: # מאפשר הרצה ידנית בלחיצת כפתור
+      - 'uploads/**'
+      - '**/*.apk'
+      - '**/*.xapk'
+  workflow_dispatch:
 
 jobs:
   sign_and_package:
@@ -22,39 +23,43 @@ jobs:
           distribution: 'temurin'
 
       - name: Decode Keystore
+        env:
+          K_FILE: ${{ secrets.KEYSTORE_FILE }}
         run: |
-          # הפענוח כולל ניקוי רווחים למניעת שגיאת "Tag number over 30"
-          echo "${{ secrets.KEYSTORE_FILE }}" | tr -d '[:space:]' | base64 --decode > release.jks
+          # 1. ניקוי יסודי של רווחים ופענוח עם התעלמות מתווים לא חוקיים (Garbage)
+          echo "$K_FILE" | tr -d '[:space:]' | base64 --decode --ignore-garbage > release.jks
           
-          # בדיקה שהקובץ אכן נוצר ולא ריק
+          # 2. בדיקת תקינות הקובץ
           if [ ! -s release.jks ]; then
-            echo "Error: Keystore file is empty after decoding!"
+            echo "Error: Resulting keystore file is empty!"
             exit 1
           fi
+          
+          # 3. הדפסת מידע ללוג (עוזר לאתר אם הקובץ הוא באמת Keystore)
+          echo "File info:"
+          file release.jks
+          echo "File size: $(stat -c%s release.jks) bytes"
 
       - name: Process and Sign Files
         run: |
-          # יצירת תיקיית פלט
           mkdir -p signed_packages
           
-          # חיפוש קבצים בתיקיית uploads או בשורש הפרויקט
-          find . -type f \( -name "*.apk" -o -name "*.xapk" -o -name "*.apks" \) | while read file; do
-            # מניעת עיבוד של קבצים שכבר נמצאים בתוך תיקיית הפלט
+          # חיפוש קבצים (נמנע מתיקיית הפלט)
+          find . -type f \( -name "*.apk" -o -name "*.xapk" \) | while read file; do
             if [[ "$file" == *"signed_packages"* ]]; then continue; fi
             
             filename=$(basename "$file")
             zip_name="${filename%.*}.zip"
             
             echo "------------------------------------------"
-            echo "Processing: $filename"
+            echo "Packing and Signing: $filename"
             
-            # 1. אריזה ל-ZIP (הקובץ המקורי נשאר ללא שינוי בפנים)
+            # אריזה ל-ZIP
             zip -j "signed_packages/$zip_name" "$file"
             
-            # 2. חתימה על ה-ZIP
-            # הוספנו -storetype jks למקרה שהמפתח נוצר בפורמט ישן/חדש
+            # חתימה - הסרנו את ה-storetype כדי לאפשר זיהוי אוטומטי
+            # הוספנו גרשיים סביב הסיסמאות למקרה שיש בהן תווים מיוחדים
             jarsigner -keystore release.jks \
-              -storetype jks \
               -storepass "${{ secrets.KEYSTORE_PASSWORD }}" \
               -keypass "${{ secrets.KEY_PASSWORD }}" \
               -digestalg SHA-256 \
@@ -62,7 +67,7 @@ jobs:
               "signed_packages/$zip_name" \
               "${{ secrets.KEY_ALIAS }}"
               
-            echo "Successfully signed and created: $zip_name"
+            echo "Successfully created: $zip_name"
           done
 
       - name: Upload Signed Artifacts
@@ -70,4 +75,4 @@ jobs:
         with:
           name: signed-apps-collection
           path: signed_packages/
-          retention-days: 5 # הקבצים יישמרו בגיטהאב ל-5 ימים
+          retention-days: 5
