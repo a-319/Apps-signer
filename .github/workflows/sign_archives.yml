@@ -22,39 +22,52 @@ jobs:
           distribution: 'temurin'
 
       - name: Decode Keystore
-        env:
-          K_FILE: ${{ secrets.KEYSTORE_FILE }}
         run: |
-          # שימוש בפייתון כדי להבטיח פענוח בינארי תקין ללא תלות ב-Shell
-          python3 -c "import base64, os; data = os.environ['K_FILE'].strip(); open('release.jks', 'wb').write(base64.b64decode(data))"
+          # שימוש ב-Heredoc כדי להעביר את הסוד בבטחה לפייתון
+          python3 << 'EOF'
+          import base64
+          import os
           
-          # בדיקה שהקובץ פוענח כראוי (אמור להציג 'Data' או 'Java KeyStore' ולא 'ASCII')
-          echo "File type detection:"
+          # קריאת הסוד ישירות מהסביבה של גיטהאב
+          secret_data = """${{ secrets.KEYSTORE_FILE }}""".strip()
+          
+          try:
+              # ניסיון פענוח
+              decoded_data = base64.b64decode(secret_data, validate=False)
+              with open("release.jks", "wb") as f:
+                  f.write(decoded_data)
+              print("Decoding successful.")
+          except Exception as e:
+              print(f"Decoding failed: {e}")
+              exit(1)
+          EOF
+          
+          # בדיקה מה נוצר
+          echo "Detecting file type..."
           file release.jks
           
+          # אם הקובץ עדיין מזוהה כטקסט, סימן שהסוד בגיטהאב הוא לא Base64 תקין
           if file release.jks | grep -q "text"; then
-            echo "ERROR: Decoding failed - File is still text. Check if your Secret is valid Base64."
+            echo "-------------------------------------------------------"
+            echo "ERROR: The file is STILL text."
+            echo "This means the value in GitHub Secrets is not a valid Base64 string."
+            echo "It likely contains headers, spaces, or is just the raw file content."
+            echo "-------------------------------------------------------"
             exit 1
           fi
 
       - name: Process and Sign Files
         run: |
           mkdir -p signed_packages
-          
-          # חיפוש קבצי APK
           find . -type f -name "*.apk" | while read file; do
             if [[ "$file" == *"signed_packages"* ]]; then continue; fi
             
             filename=$(basename "$file")
             zip_name="${filename%.*}.zip"
             
-            echo "------------------------------------------"
             echo "Packing and Signing: $filename"
-            
-            # אריזה ל-ZIP
             zip -j "signed_packages/$zip_name" "$file"
             
-            # חתימה עם jarsigner
             jarsigner -keystore release.jks \
               -storepass "${{ secrets.KEYSTORE_PASSWORD }}" \
               -keypass "${{ secrets.KEY_PASSWORD }}" \
@@ -62,8 +75,6 @@ jobs:
               -sigalg SHA256withRSA \
               "signed_packages/$zip_name" \
               "${{ secrets.KEY_ALIAS }}"
-              
-            echo "Success: $zip_name created and signed."
           done
 
       - name: Upload Signed Artifacts
